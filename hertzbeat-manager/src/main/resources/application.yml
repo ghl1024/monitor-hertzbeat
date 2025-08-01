@@ -138,8 +138,10 @@ warehouse:
       username: root
       password: root
       insert:
-        buffer-size: 1000
+        buffer-size: 100
         flush-interval: 3
+        compression:
+          enabled: false
       cluster:
         enabled: false
         select:

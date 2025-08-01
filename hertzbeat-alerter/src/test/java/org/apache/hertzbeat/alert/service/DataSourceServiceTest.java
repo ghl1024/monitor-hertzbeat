@@ -21,6 +21,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.apache.hertzbeat.alert.service.impl.DataSourceServiceImpl;
+import org.apache.hertzbeat.common.support.exception.AlertExpressionException;
 import org.apache.hertzbeat.warehouse.db.QueryExecutor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,6 +35,9 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 
 /**
  * test case for {@link DataSourceService}
@@ -392,8 +396,7 @@ class DataSourceServiceTest {
         dataSourceService.setExecutors(List.of(mockExecutor));
 
         List<Map<String, Object>> result = dataSourceService.calculate("promql", "node_cpu_seconds_total{mode=\"user\"} > 250 or node_cpu_seconds_total{mode=\"idle\"} < 20");
-        assertEquals(1, result.size());
-        assertNull(result.get(0).get("__value__"));
+        assertEquals(0, result.size());
     }
 
     @Test
@@ -414,8 +417,7 @@ class DataSourceServiceTest {
         dataSourceService.setExecutors(List.of(mockExecutor));
 
         List<Map<String, Object>> result = dataSourceService.calculate("promql", "node_cpu_seconds_total{mode=\"user\"} > 50 or node_cpu_seconds_total{mode=\"idle\"} < 320");
-        assertEquals(1, result.size());
-        assertNotNull(result.get(0).get("__value__"));
+        assertEquals(4, result.size());
     }
 
     @Test
@@ -436,8 +438,8 @@ class DataSourceServiceTest {
         dataSourceService.setExecutors(List.of(mockExecutor));
 
         List<Map<String, Object>> result = dataSourceService.calculate("promql", "node_cpu_seconds_total{mode=\"user\"} > 50 unless node_cpu_seconds_total{mode=\"idle\"} < 320");
-        assertEquals(1, result.size());
-        assertNull(result.get(0).get("__value__"));
+        assertEquals(2, result.size());
+        assertEquals(100.0, result.get(0).get("__value__"));
     }
 
     @Test
@@ -458,8 +460,8 @@ class DataSourceServiceTest {
         dataSourceService.setExecutors(List.of(mockExecutor));
 
         List<Map<String, Object>> result = dataSourceService.calculate("promql", "node_cpu_seconds_total{mode=\"user\"} > 50 unless node_cpu_seconds_total{mode=\"idle\"} < 20");
-        assertEquals(1, result.size());
-        assertNotNull(result.get(0).get("__value__"));
+        assertEquals(2, result.size());
+        assertEquals(100.0, result.get(0).get("__value__"));
     }
 
     @Test
@@ -480,8 +482,7 @@ class DataSourceServiceTest {
         dataSourceService.setExecutors(List.of(mockExecutor));
 
         List<Map<String, Object>> result = dataSourceService.calculate("promql", "node_cpu_seconds_total{mode=\"user\"} > 250 unless node_cpu_seconds_total{mode=\"idle\"} < 20");
-        assertEquals(1, result.size());
-        assertNull(result.get(0).get("__value__"));
+        assertEquals(0, result.size());
     }
 
     @Test
@@ -558,7 +559,6 @@ class DataSourceServiceTest {
         tokenStreamCache.invalidateAll();
         long beforeHits = tokenStreamCache.stats().hitCount();
         dataSourceService.calculate("promql", expr);
-        expressionCache.invalidateAll();
         dataSourceService.calculate("promql", expr);
         long actualHits = tokenStreamCache.stats().hitCount() - beforeHits;
         assertEquals(1, actualHits, "expression cache should hit but miss");
@@ -608,5 +608,35 @@ class DataSourceServiceTest {
         dataSourceService.calculate("promql", expr2);
         long actualHits = tokenStreamCache.stats().hitCount() - beforeHits;
         assertEquals(0, actualHits, "expression cache should miss but hit");
+    }
+
+    @Test
+    void testAlertExpressionException() {
+        List<Map<String, Object>> prometheusData = List.of(
+                new HashMap<>() {
+                    {
+                        put("exception", "none");
+                        put("instance", "host.docker.internal:8989");
+                        put("__value__", 1307);
+                        put("method", "GET");
+                        put("__name__", "http_server_requests_seconds_count");
+                        put("__timestamp__", "1.750320922467E9");
+                        put("error", "none");
+                        put("job", "spring-boot-app");
+                        put("uri", "/actuator/prometheus");
+                        put("outcome", "SUCCESS");
+                        put("status", "200");
+                    }
+                });
+        QueryExecutor mockExecutor = Mockito.mock(QueryExecutor.class);
+        when(mockExecutor.support(eq("promql"))).thenReturn(true);
+        when(mockExecutor.execute(eq("http_server_requests_seconds_count"))).thenReturn(prometheusData);
+
+        dataSourceService.setExecutors(List.of(mockExecutor));
+        List<Map<String, Object>> result = dataSourceService.calculate("promql", "http_server_requests_seconds_count > 10");
+        assertNotNull(result);
+        assertEquals(1307, result.get(0).get("__value__"));
+
+        assertThrows(AlertExpressionException.class, () -> dataSourceService.calculate("promql", "http_server_requests_seconds_count{!@~!!#$%^&}"));
     }
 }
